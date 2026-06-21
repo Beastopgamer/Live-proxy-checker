@@ -31,59 +31,40 @@ def check_proxy(proxy):
     return None
 
 
-@bot.message_handler(commands=['start'])
-def start(message):
-    bot.reply_to(
+def send_results(message, proxies, file_name="live.txt"):
+    msg = bot.reply_to(
         message,
-        "📁 Send a TXT file containing proxies.\n\nFormat:\nIP:PORT"
+        f"🔍 Checking {len(proxies)} proxies..."
     )
 
+    live = []
 
-@bot.message_handler(content_types=['document'])
-def handle_file(message):
+    with ThreadPoolExecutor(max_workers=100) as executor:
+        results = executor.map(check_proxy, proxies)
+
+        for result in results:
+            if result:
+                live.append(result)
+
+    total_count = len(proxies)
+    live_count = len(live)
+    dead_count = total_count - live_count
+
     try:
-        file_info = bot.get_file(message.document.file_id)
-        downloaded = bot.download_file(file_info.file_path)
+        bot.delete_message(message.chat.id, msg.message_id)
+    except:
+        pass
 
-        with open("proxies.txt", "wb") as f:
-            f.write(downloaded)
+    user_name = (
+        f"@{message.from_user.username}"
+        if message.from_user.username
+        else message.from_user.first_name
+    )
 
-        with open("proxies.txt", "r", encoding="utf-8", errors="ignore") as f:
-            proxies = [x.strip() for x in f if ":" in x]
-
-        msg = bot.reply_to(
-            message,
-            f"🔍 Checking {len(proxies)} proxies..."
-        )
-
-        live = []
-
-        with ThreadPoolExecutor(max_workers=100) as executor:
-            results = executor.map(check_proxy, proxies)
-
-            for result in results:
-                if result:
-                    live.append(result)
-
-        total_count = len(proxies)
-        live_count = len(live)
-        dead_count = total_count - live_count
-
-        try:
-            bot.delete_message(message.chat.id, msg.message_id)
-        except:
-            pass
-
-        user_name = (
-            f"@{message.from_user.username}"
-            if message.from_user.username
-            else message.from_user.first_name
-        )
-
-        if live_count == 0:
-            bot.send_message(
-                message.chat.id,
-                f"""
+    if live_count == 0:
+        bot.send_message(
+            message.chat.id,
+            f"""
 ╔═══ ⚡ 𝐋𝐈𝐕𝐄 𝐏𝐑𝐎𝐗𝐘 𝐂𝐇𝐄𝐂𝐊𝐄𝐑 ⚡ ═══╗
 
 👤 𝐂𝐡𝐞𝐜𝐤𝐞𝐝 𝐁𝐲 : {user_name}
@@ -93,23 +74,23 @@ def handle_file(message):
 ✅ 𝐋𝐢𝐯𝐞       : 0
 ❌ 𝐃𝐞𝐚𝐝       : {dead_count}
 
-🚫 𝐍𝐨 𝐥𝐢𝐯𝐞 𝐩𝐫𝐨𝐱𝐢𝐞𝐬 𝐟𝐨𝐮𝐧𝐝.
+🚫 𝐍𝐨 𝐋𝐢𝐯𝐞 𝐏𝐫𝐨𝐱𝐢𝐞𝐬 𝐅𝐨𝐮𝐧𝐝
 
 ╚════════════════════════════╝
 """
-            )
-            return
+        )
+        return
 
-        with open("live.txt", "w") as f:
-            f.write("\n".join(live))
+    with open("live.txt", "w") as f:
+        f.write("\n".join(live))
 
-        caption = f"""
+    caption = f"""
 ╔═══ ⚡ 𝐋𝐈𝐕𝐄 𝐏𝐑𝐎𝐗𝐘 𝐂𝐇𝐄𝐂𝐊𝐄𝐑 ⚡ ═══╗
 
 👤 𝐂𝐡𝐞𝐜𝐤𝐞𝐝 𝐁𝐲 : {user_name}
 🤖 𝐁𝐨𝐭 𝐁𝐲     : 𝐁𝐄𝐀𝐒𝐓
 
-📁 𝐅𝐢𝐥𝐞       : {message.document.file_name}
+📁 𝐅𝐢𝐥𝐞       : {file_name}
 
 📊 𝐓𝐨𝐭𝐚𝐥      : {total_count}
 ✅ 𝐋𝐢𝐯𝐞       : {live_count}
@@ -120,12 +101,68 @@ def handle_file(message):
 ╚════════════════════════════╝
 """
 
-        with open("live.txt", "rb") as f:
-            bot.send_document(
-                message.chat.id,
-                f,
-                caption=caption
-            )
+    with open("live.txt", "rb") as f:
+        bot.send_document(
+            message.chat.id,
+            f,
+            caption=caption
+        )
+
+
+@bot.message_handler(commands=["start"])
+def start(message):
+    bot.reply_to(
+        message,
+        "📁 Send TXT file or paste proxies.\n\nFormat:\nIP:PORT"
+    )
+
+
+@bot.message_handler(content_types=["document"])
+def handle_document(message):
+    try:
+        file_info = bot.get_file(message.document.file_id)
+        downloaded = bot.download_file(file_info.file_path)
+
+        with open("proxies.txt", "wb") as f:
+            f.write(downloaded)
+
+        with open("proxies.txt", "r", encoding="utf-8", errors="ignore") as f:
+            proxies = [
+                x.strip()
+                for x in f
+                if ":" in x
+            ]
+
+        send_results(
+            message,
+            proxies,
+            message.document.file_name
+        )
+
+    except Exception as e:
+        bot.reply_to(message, f"Error: {e}")
+
+
+@bot.message_handler(content_types=["text"])
+def handle_text(message):
+    try:
+        if ":" not in message.text:
+            return
+
+        proxies = [
+            x.strip()
+            for x in message.text.splitlines()
+            if ":" in x
+        ]
+
+        if not proxies:
+            return
+
+        send_results(
+            message,
+            proxies,
+            "Pasted Proxies"
+        )
 
     except Exception as e:
         bot.reply_to(message, f"Error: {e}")
