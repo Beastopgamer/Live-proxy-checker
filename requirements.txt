@@ -2,4 +2,4 @@ pyTelegramBotAPI
 requests
 aiohttp
 telebot
-socks
+PySocks
