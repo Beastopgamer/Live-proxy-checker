@@ -2,6 +2,7 @@ import telebot
 import requests
 import socks
 import socket
+import time
 from concurrent.futures import ThreadPoolExecutor
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 
@@ -23,25 +24,31 @@ def is_joined(user_id):
     except:
         return False
 
-def check_proxy(proxy_str, message, index, total):
+def check_proxy(proxy_str, message, index, total, live_list, dead_list, start_time, last_update):
     """Check individual proxy with progress updates."""
     try:
         parts = proxy_str.strip().split(":")
         if len(parts) < 2:
-            return None
+            dead_list.append(None)
+            return
             
         host, port = parts[0], int(parts[1])
         proxy_type = parts[2].lower() if len(parts) > 2 else "http"
         auth = f"{parts[3]}:{parts[4]}@" if len(parts) > 4 else ""
         
-        # Show progress update
-        if index % 10 == 0 or index == total - 1:
+        # Calculate elapsed time
+        elapsed = time.time() - start_time
+        time_per_proxy = elapsed / max(index, 1)
+        
+        # Update progress every 20 proxies or at completion
+        if index % 20 == 0 or index == total - 1:
             try:
                 bot.edit_message_text(
-                    f"🔍 Checking proxies... {index+1}/{total}",
+                    f"⚡️ [𝐁𝐄𝐀𝐒𝐓 𝐂𝐇𝐄𝐂𝐊𝐄𝐑] ⚡️\n\n🔄 Checking proxies...\n\n📊 Checked: {index+1}/{total}\n✅ Live: {len(live_list)}\n❌ Dead: {len(dead_list)}\n⏱️ Time: {elapsed:.1f}s\n⏰ ETA: {(total-index)*time_per_proxy:.1f}s\n━━━━━━━━━━━━━━━━━━━━━━",
                     message.chat.id,
                     message.message_id
                 )
+                last_update[0] = time.time()
             except:
                 pass
         
@@ -57,7 +64,8 @@ def check_proxy(proxy_str, message, index, total):
                 timeout=TIMEOUT
             )
             if r.status_code == 200:
-                return f"{host}:{port}"
+                live_list.append(f"{host}:{port}")
+                return
                 
         # Try SOCKS proxies
         elif proxy_type.startswith("socks"):
@@ -71,21 +79,25 @@ def check_proxy(proxy_str, message, index, total):
                 sock.set_auth(parts[3], parts[4])
                 
             sock.connect(("httpbin.org", 80))
-            return f"{host}:{port}"
+            live_list.append(f"{host}:{port}")
+            return
             
     except Exception as e:
         pass
-    return None
+    dead_list.append(None)
 
 def send_results(message, proxies):
     """Check all proxies and send results."""
     # Send initial message
+    start_time = time.time()
     msg = bot.reply_to(
         message,
-        f"🔍 Checking {len(proxies)} proxies..."
+        "⚡️ [𝐁𝐄𝐀𝐒𝐓 𝐂𝐇𝐄𝐂𝐊𝐄𝐑] ⚡️\n\n🔄 Checking proxies...\n\n📊 Checked: 0/0\n✅ Live: 0\n❌ Dead: 0\n⏱️ Time: 0.0s\n⏰ ETA: 0.0s\n━━━━━━━━━━━━━━━━━━━━━━"
     )
     
     live = []
+    dead = []
+    last_update = [time.time()]
     
     with ThreadPoolExecutor(max_workers=20) as executor:
         futures = []
@@ -95,14 +107,16 @@ def send_results(message, proxies):
                 proxy, 
                 message, 
                 i, 
-                len(proxies)
+                len(proxies),
+                live,
+                dead,
+                start_time,
+                last_update
             )
             futures.append(future)
             
         for future in futures:
-            result = future.result()
-            if result:
-                live.append(result)
+            future.result()
     
     # Remove progress message
     try:
@@ -112,7 +126,8 @@ def send_results(message, proxies):
     
     total_count = len(proxies)
     live_count = len(live)
-    dead_count = total_count - live_count
+    dead_count = len(dead)
+    elapsed = time.time() - start_time
     
     user_name = (
         f"@{message.from_user.username}"
@@ -124,12 +139,13 @@ def send_results(message, proxies):
         bot.send_message(
             message.chat.id,
             f"""
-╔═══ ⚡ [𝐋𝐈𝐕𝐄 𝐏𝐑𝐎𝐗𝐘 𝐂𝐇𝐄𝐂𝐊𝐄𝐑] ⚡ ═══╗
+╔═══ ⚡ [𝐁𝐄𝐀𝐒𝐓 𝐂𝐇𝐄𝐂𝐊𝐄𝐑] ⚡ ═══╗
 👤 [𝐂𝐡𝐞𝐜𝐤𝐞𝐝 𝐁𝐲] : {user_name}
 🤖 [𝐁𝐨𝐭 𝐁𝐲]     : [𝐁𝐄𝐀𝐒𝐓]
 📊 [𝐓𝐨𝐭𝐚𝐥]      : {total_count}
 ✅ [𝐋𝐢𝐯𝐞]       : 0
 ❌ [𝐃𝐞𝐚𝐝]       : {dead_count}
+⏱️ [𝐓𝐢𝐦𝐞]       : {elapsed:.1f}s
 🚫 [𝐍𝐨 𝐋𝐢𝐯𝐞 𝐏𝐫𝐨𝐱𝐢𝐞𝐬 𝐅𝐨𝐮𝐧𝐝]
 ╚════════════════════════════╝
 """
@@ -140,13 +156,14 @@ def send_results(message, proxies):
         f.write("\n".join(live))
     
     caption = f"""
-╔═══ ⚡ [𝐋𝐈𝐕𝐄 𝐏𝐑𝐎𝐗𝐘 𝐂𝐇𝐄𝐂𝐊𝐄𝐑] ⚡ ═══╗
+╔═══ ⚡ [𝐁𝐄𝐀𝐒𝐓 𝐂𝐇𝐄𝐂𝐊𝐄𝐑] ⚡ ═══╗
 👤 [𝐂𝐡𝐞𝐜𝐤𝐞𝐝 𝐁𝐲] : {user_name}
 🤖 [𝐁𝐨𝐭 𝐁𝐲]     : [𝐁𝐄𝐀𝐒𝐓]
 📁 [𝐅𝐢𝐥𝐞]       : live.txt
 📊 [𝐓𝐨𝐭𝐚𝐥]      : {total_count}
 ✅ [𝐋𝐢𝐯𝐞]       : {live_count}
 ❌ [𝐃𝐞𝐚𝐝]       : {dead_count}
+⏱️ [𝐓𝐢𝐦𝐞]       : {elapsed:.1f}s
 🔥 [𝐏𝐨𝐰𝐞𝐫𝐞𝐝 𝐁𝐲 𝐁𝐄𝐀𝐒𝐓]
 ╚════════════════════════════╝
 """
