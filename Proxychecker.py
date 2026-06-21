@@ -87,7 +87,7 @@ def send_results(message, proxies):
     
     live = []
     
-    with ThreadPoolExecutor(max_workers=100) as executor:
+    with ThreadPoolExecutor(max_workers=20) as executor:
         futures = []
         for i, proxy in enumerate(proxies):
             future = executor.submit(
