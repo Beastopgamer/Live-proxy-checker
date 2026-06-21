@@ -4,3 +4,4 @@ aiohttp
 telebot
 PySocks
 flask
+flask-limiter
