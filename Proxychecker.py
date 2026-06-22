@@ -38,7 +38,10 @@ checking_state = {
     "count": 0,
     "live": 0,
     "dead": 0,
-    "last_update": time.time()
+    "last_update": time.time(),
+    "live_proxies": [],
+    "file_name": "",
+    "msg_id": None
 }
 
 @app.route("/")
@@ -62,7 +65,9 @@ def status():
         "active": checking_state["active"],
         "count": checking_state["count"],
         "live": checking_state["live"],
-        "dead": checking_state["dead"]
+        "dead": checking_state["dead"],
+        "live_proxies": checking_state["live_proxies"],
+        "file_name": checking_state["file_name"]
     })
 
 def run_bot():
@@ -97,7 +102,7 @@ def run_bot():
                 proxies = [x.strip() for x in f if ":" in x]
 
             # Start checking in background
-            threading.Thread(target=check_proxies, args=(message, proxies)).start()
+            threading.Thread(target=check_proxies, args=(message, proxies, message.document.file_name)).start()
         except Exception as e:
             bot.reply_to(message, f"Error: {e}")
 
@@ -116,13 +121,13 @@ def run_bot():
                 return
 
             # Start checking in background
-            threading.Thread(target=check_proxies, args=(message, proxies)).start()
+            threading.Thread(target=check_proxies, args=(message, proxies, "Pasted Proxies")).start()
         except Exception as e:
             bot.reply_to(message, f"Error: {e}")
 
     bot.infinity_polling()
 
-def check_proxies(message, proxies):
+def check_proxies(message, proxies, file_name):
     """Check proxies and update state."""
     global checking_state
     
@@ -131,72 +136,33 @@ def check_proxies(message, proxies):
     checking_state["count"] = len(proxies)
     checking_state["live"] = 0
     checking_state["dead"] = 0
+    checking_state["live_proxies"] = []
+    checking_state["file_name"] = file_name
     
     try:
         # Send initial status update
-        update_status(message)
+        msg = bot.reply_to(
+            message,
+            f"⚡️ [𝐁𝐄𝐀𝐒𝐓 𝐂𝐇𝐄𝐂𝐊𝐄𝐑] ⚡️\n\n🔄 Checking proxies...\n\n📊 Checked: 0/{checking_state['count']}\n✅ Live: 0\n❌ Dead: 0\n⏱️ Time: 0.0s\n━━━━━━━━━━━━━━━━━━━━━━"
+        )
+        checking_state["msg_id"] = msg.message_id
         
         # Process proxies
-        for i, proxy in enumerate(proxies):
-            try:
-                # Parse proxy string
-                parts = proxy.split(":")
-                if len(parts) < 2:
-                    checking_state["dead"] += 1
-                    continue
-                    
-                host, port = parts[0], int(parts[1])
-                proxy_type = parts[2].lower() if len(parts) > 2 else "http"
+        import concurrent.futures
+        with concurrent.futures.ThreadPoolExecutor(max_workers=20) as executor:
+            futures = []
+            
+            for i, proxy in enumerate(proxies):
+                future = executor.submit(check_single_proxy, proxy, i, len(proxies), message)
+                futures.append(future)
                 
-                # Try proxy based on type
-                success = False
-                
-                # Try HTTP/HTTPS
-                if proxy_type in ["http", "https"]:
-                    import requests
-                    proxies_dict = {
-                        "http": f"{proxy_type}://{host}:{port}",
-                        "https": f"{proxy_type}://{host}:{port}"
-                    }
-                    try:
-                        r = requests.get(
-                            "http://httpbin.org/ip",
-                            proxies=proxies_dict,
-                            timeout=5
-                        )
-                        if r.status_code == 200:
-                            success = True
-                    except:
-                        pass
-                        
-                # Try SOCKS proxies
-                elif proxy_type.startswith("socks"):
-                    import socks
-                    import socket
-                    try:
-                        protocol = proxy_type.replace("socks", "")
-                        sock_type = socks.SOCKS5 if protocol == "5" else socks.SOCKS4
-                        
-                        sock = socks.socksocket(socket.AF_INET, socket.SOCK_STREAM)
-                        sock.set_proxy(sock_type, host, port)
-                        
-                        sock.connect(("httpbin.org", 80))
-                        success = True
-                    except:
-                        pass
-                
-                # Update counters
-                if success:
-                    checking_state["live"] += 1
-                else:
-                    checking_state["dead"] += 1
-                    
                 # Update status every 20 proxies
                 if i % 20 == 0 or i == len(proxies) - 1:
                     update_status(message)
-                    
-            except Exception as e:
-                checking_state["dead"] += 1
+            
+            # Wait for all futures to complete
+            for future in concurrent.futures.as_completed(futures):
+                future.result()
                 
     finally:
         checking_state["active"] = False
@@ -208,21 +174,106 @@ def check_proxies(message, proxies):
         
         # Generate results file
         with open("live.txt", "w") as f:
-            # In real implementation, write actual live proxies here
-            f.write("Live proxies would be written here")
+            f.write("\n".join(checking_state["live_proxies"]))
         
-        # Send final results
+        # Format user name
+        user_name = (
+            f"@{message.from_user.username}"
+            if message.from_user.username
+            else message.from_user.first_name
+        )
+        
+        # Remove status message
+        try:
+            bot.delete_message(message.chat.id, checking_state["msg_id"])
+        except:
+            pass
+        
+        # Send final results with document
         bot.reply_to(
             message,
             f"""
 ╔═══ ⚡ [𝐁𝐄𝐀𝐒𝐓 𝐂𝐇𝐄𝐂𝐊𝐄𝐑] ⚡ ═══╗
-📊 Checked: {total_count}
-✅ Live: {live_count}
-❌ Dead: {dead_count}
-⏱️ Time: {time.time() - checking_state['last_update']:.1f}s
-╚════════════════════════════╝
+👤 [𝐂𝐡𝐞𝐜𝐤𝐞𝐝 𝐁𝐲] : {user_name}
+🤖 [𝐁𝐨𝐭 𝐁𝐲]     : [𝐁𝐄𝐀𝐒𝐓]
+📁 [𝐅𝐢𝐥𝐞]       : {file_name}
+📊 [𝐓𝐨𝐭𝐚𝐥]      : {total_count}
+✅ [𝐋𝐢𝐯𝐞]       : {live_count}
+❌ [𝐃𝐞𝐚𝐝]       : {dead_count}
+⏱️ [𝐓𝐢𝐦𝐞]       : {time.time() - checking_state['last_update']:.1f}s
+🔥 [𝐏𝐨𝐰𝐞𝐫𝐞𝐝 𝐁𝐲 𝐁𝐄𝐀𝐒𝐓]
+╚═══════════════════════════╝
 """
         )
+        
+        # Send live proxy file
+        with open("live.txt", "rb") as f:
+            bot.send_document(
+                message.chat.id,
+                f,
+                caption=f"📊 Live proxies ({live_count} found)"
+            )
+
+def check_single_proxy(proxy_str, index, total, message):
+    """Check single proxy with 10s timeout."""
+    global checking_state
+    
+    try:
+        # Parse proxy string
+        parts = proxy_str.split(":")
+        if len(parts) < 2:
+            checking_state["dead"] += 1
+            return
+            
+        host, port = parts[0], int(parts[1])
+        proxy_type = parts[2].lower() if len(parts) > 2 else "http"
+        
+        # Try proxy based on type
+        success = False
+        
+        # Try HTTP/HTTPS
+        if proxy_type in ["http", "https"]:
+            import requests
+            proxies_dict = {
+                "http": f"{proxy_type}://{host}:{port}",
+                "https": f"{proxy_type}://{host}:{port}"
+            }
+            try:
+                r = requests.get(
+                    "http://httpbin.org/ip",
+                    proxies=proxies_dict,
+                    timeout=10
+                )
+                if r.status_code == 200:
+                    success = True
+                    checking_state["live_proxies"].append(f"{host}:{port}")
+            except:
+                pass
+                
+        # Try SOCKS proxies
+        elif proxy_type.startswith("socks"):
+            import socks
+            import socket
+            try:
+                protocol = proxy_type.replace("socks", "")
+                sock_type = socks.SOCKS5 if protocol == "5" else socks.SOCKS4
+                
+                sock = socks.socksocket(socket.AF_INET, socket.SOCK_STREAM)
+                sock.set_proxy(sock_type, host, port)
+                sock.connect(("httpbin.org", 80))
+                success = True
+                checking_state["live_proxies"].append(f"{host}:{port}")
+            except:
+                pass
+        
+        # Update counters
+        if success:
+            checking_state["live"] += 1
+        else:
+            checking_state["dead"] += 1
+            
+    except Exception as e:
+        checking_state["dead"] += 1
 
 def update_status(message):
     """Update status message."""
@@ -237,7 +288,7 @@ def update_status(message):
             bot.edit_message_text(
                 f"⚡️ [𝐁𝐄𝐀𝐒𝐓 𝐂𝐇𝐄𝐂𝐊𝐄𝐑] ⚡️\n\n🔄 Checking proxies...\n\n📊 Checked: {checking_state['live'] + checking_state['dead']}/{checking_state['count']}\n✅ Live: {checking_state['live']}\n❌ Dead: {checking_state['dead']}\n⏱️ Time: {elapsed:.1f}s\n━━━━━━━━━━━━━━━━━━━━━━",
                 message.chat.id,
-                message.message_id
+                checking_state["msg_id"]
             )
             checking_state["last_update"] = current_time
         except:
